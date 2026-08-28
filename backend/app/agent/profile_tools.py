@@ -30,7 +30,7 @@ from app.profile.personality import (
     clamp,
 )
 
-logger = logging.getLogger("sfcc.agent.profile_tools")
+logger = logging.getLogger("vidi.agent.profile_tools")
 
 # Everyday phrasings mapped onto trait names, so the model does not have to
 # guess our internal vocabulary.

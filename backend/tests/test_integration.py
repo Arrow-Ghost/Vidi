@@ -162,12 +162,12 @@ def test_tools_answer_from_the_scene_the_websocket_just_perceived() -> None:
 
 # --------------------------------------------------------------------------
 # Opt-in: real Gemini Live round trip. Requires network + API credits.
-#   set SFCC_LIVE_TESTS=1
+#   set VIDI_LIVE_TESTS=1
 # --------------------------------------------------------------------------
 
 @pytest.mark.skipif(
-    os.environ.get("SFCC_LIVE_TESTS") != "1" or not os.environ.get("GEMINI_API_KEY"),
-    reason="set SFCC_LIVE_TESTS=1 and GEMINI_API_KEY to run the live voice test",
+    os.environ.get("VIDI_LIVE_TESTS") != "1" or not os.environ.get("GEMINI_API_KEY"),
+    reason="set VIDI_LIVE_TESTS=1 and GEMINI_API_KEY to run the live voice test",
 )
 def test_live_agent_answers_are_grounded_in_real_perception() -> None:
     from app.agent.live_session import LiveVoiceSession

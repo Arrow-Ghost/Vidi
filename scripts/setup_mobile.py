@@ -113,7 +113,7 @@ def generate_cert(lan_ip: str, extra_ips: list) -> None:
 
     subject = x509.Name([
         x509.NameAttribute(NameOID.COMMON_NAME, lan_ip),
-        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "SFCC Assistive Agent (dev)"),
+        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Vidi Assistive Agent (dev)"),
     ])
     now = datetime.datetime.now(datetime.timezone.utc)
     certificate = (

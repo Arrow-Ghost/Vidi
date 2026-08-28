@@ -22,7 +22,7 @@ def test_health_endpoint_reports_status_without_leaking_secrets() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok"
-    assert body["service"] == "sfcc-backend"
+    assert body["service"] == "vidi-backend"
     # gemini_configured is a derived boolean; the key itself must never appear.
     assert isinstance(body["gemini_configured"], bool)
     serialized = json.dumps(body)

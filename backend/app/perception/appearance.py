@@ -38,7 +38,7 @@ from typing import List, Optional, Sequence, Tuple
 import cv2
 import numpy as np
 
-logger = logging.getLogger("sfcc.perception.appearance")
+logger = logging.getLogger("vidi.perception.appearance")
 
 MODEL_PATH = (
     Path(__file__).resolve().parents[3] / "models" / "weights" / "mobilenetv2_embed.onnx"

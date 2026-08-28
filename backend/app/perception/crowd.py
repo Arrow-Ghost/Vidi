@@ -34,7 +34,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from app.perception.direction import DirectionBucket, _raw_bucket
 
-logger = logging.getLogger("sfcc.perception.crowd")
+logger = logging.getLogger("vidi.perception.crowd")
 
 
 class CrowdSize(str, Enum):

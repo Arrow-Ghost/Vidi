@@ -34,7 +34,7 @@ import numpy as np
 
 from app.perception.direction import DirectionBucket, _raw_bucket
 
-logger = logging.getLogger("sfcc.agent.vision_llm")
+logger = logging.getLogger("vidi.agent.vision_llm")
 
 VISION_MODEL = "gemini-3.1-flash-lite"
 API_BASE = "https://generativelanguage.googleapis.com/v1beta/models/"

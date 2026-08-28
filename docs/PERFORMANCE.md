@@ -309,7 +309,7 @@ Two further tests are opt-in because they make real Gemini calls (live voice
 and real semantic search):
 
 ```bash
-SFCC_LIVE_TESTS=1 pytest tests/test_integration.py -k live
+VIDI_LIVE_TESTS=1 pytest tests/test_integration.py -k live
 ```
 
 ## Detection accuracy

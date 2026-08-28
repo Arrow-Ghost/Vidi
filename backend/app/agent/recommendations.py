@@ -37,7 +37,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from app.profile.personality import PersonalityEngine, Trait
 
-logger = logging.getLogger("sfcc.agent.recommendations")
+logger = logging.getLogger("vidi.agent.recommendations")
 
 # Place words that can appear on signage, mapped to a category and the
 # preference key that makes them personally relevant.

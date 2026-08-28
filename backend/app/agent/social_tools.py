@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-logger = logging.getLogger("sfcc.agent.social_tools")
+logger = logging.getLogger("vidi.agent.social_tools")
 
 
 def register_social_tools(registry, pipeline, recommendations, store) -> None:

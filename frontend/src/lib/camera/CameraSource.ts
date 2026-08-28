@@ -1,3 +1,4 @@
+import { requireMediaDevices } from '../media/secureContext';
 import type { CameraSourceOptions, CameraState } from './types';
 
 /**
@@ -24,7 +25,11 @@ export class CameraSource {
   async start(): Promise<MediaStream> {
     this.setState('starting');
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
+      // Checked explicitly: on an insecure origin navigator.mediaDevices is
+      // undefined, and calling through it yields an opaque TypeError instead
+      // of the real problem, which is the http:// address.
+      const media = requireMediaDevices();
+      const stream = await media.getUserMedia({
         video: {
           width: this.options.width ?? 640,
           height: this.options.height ?? 480,

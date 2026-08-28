@@ -14,13 +14,13 @@ const backendPort = import.meta.env.PUBLIC_BACKEND_PORT ?? '8000';
     <meta name="theme-color" content="#0b1220" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <title>SFCC — Assistive Agent</title>
+    <title>Vidi — Assistive Agent</title>
   </head>
   <body data-ws={backendWsOverride} data-backend-port={backendPort}>
     <a class="skip" href="#conversation">Skip to conversation</a>
 
     <header>
-      <h1>SFCC Assistive Agent</h1>
+      <h1>Vidi Assistive Agent</h1>
       <div class="badges">
         <span class="badge" id="conn-badge" data-state="connecting">connecting</span>
         <span class="badge" id="vision-badge">vision: —</span>
@@ -336,6 +336,8 @@ const backendPort = import.meta.env.PUBLIC_BACKEND_PORT ?? '8000';
       PHONE.addEventListener('change', (e) => applyPanelCollapsing(e.matches));
 
       // ---------- websocket ----------
+      const { describeMediaError } = await import('../lib/media/secureContext');
+
       const client = new AgentClient(wsUrl, {
         onStateChange: (state) => {
           badge('conn-badge', state, state);
@@ -438,8 +440,23 @@ const backendPort = import.meta.env.PUBLIC_BACKEND_PORT ?? '8000';
             if (MEMORY_TOOLS.has(message.tool)) renderMemory(message.result);
             break;
 
+          case 'voice_reconnecting':
+            // A dropped Live session is routine, not a failure: the backend
+            // is already retrying. Say something calm rather than throwing a
+            // protocol error at someone who cannot see the screen.
+            badge('voice-badge', 'voice: reconnecting', 'warn');
+            setAgentState('Voice connection dropped. Reconnecting…');
+            break;
+
           case 'voice_ready':
-            setAgentState('Listening… (' + message.model + ')');
+            badge('voice-badge', 'voice: ready', 'ok');
+            setAgentState(
+              message.reconnected
+                ? (message.resumed
+                    ? 'Reconnected — carrying on where we left off.'
+                    : 'Reconnected. Listening…')
+                : 'Listening… (' + message.model + ')',
+            );
             break;
 
           case 'voice_error':
@@ -887,7 +904,7 @@ const backendPort = import.meta.env.PUBLIC_BACKEND_PORT ?? '8000';
           ($('btn-mute') as HTMLButtonElement).disabled = false;
           setAgentState('Listening…');
         } catch (err) {
-          setAgentState('Could not start: ' + (err instanceof Error ? err.message : String(err)));
+          setAgentState('Could not start. ' + describeMediaError(err));
         }
       });
 

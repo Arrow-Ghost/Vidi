@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional
 from app.agent import vocabulary
 from app.memory.store import MEMORY_KINDS, MemoryStore
 
-logger = logging.getLogger("sfcc.agent.memory_tools")
+logger = logging.getLogger("vidi.agent.memory_tools")
 
 # Segment 18: sensible starting checklist, overridable per user.
 DEFAULT_CHECKLISTS: Dict[str, List[str]] = {

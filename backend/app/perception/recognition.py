@@ -39,7 +39,7 @@ from app.perception.appearance import (
 from app.perception.direction import DirectionBucket, _raw_bucket
 from app.perception.faces import FaceEngine, FaceMatch
 
-logger = logging.getLogger("sfcc.perception.recognition")
+logger = logging.getLogger("vidi.perception.recognition")
 
 # Enrolled embeddings are re-read from the database at most this often, so an
 # enrollment made in the UI takes effect within a couple of seconds without

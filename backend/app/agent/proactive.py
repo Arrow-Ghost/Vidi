@@ -28,7 +28,7 @@ from typing import Callable, List, Optional, Sequence
 from app.agent.tools import DIRECTION_PHRASE
 from app.perception.ocr import TrackedSign
 
-logger = logging.getLogger("sfcc.agent.proactive")
+logger = logging.getLogger("vidi.agent.proactive")
 
 
 class Urgency:

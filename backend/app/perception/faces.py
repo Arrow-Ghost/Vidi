@@ -35,7 +35,7 @@ from typing import List, Optional, Sequence, Tuple
 import cv2
 import numpy as np
 
-logger = logging.getLogger("sfcc.perception.faces")
+logger = logging.getLogger("vidi.perception.faces")
 
 _WEIGHTS = Path(__file__).resolve().parents[3] / "models" / "weights"
 DETECTOR_PATH = _WEIGHTS / "face_detection_yunet.onnx"

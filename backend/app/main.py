@@ -1,5 +1,5 @@
 """
-SFCC backend — the single multiplexed real-time endpoint.
+Vidi backend — the single multiplexed real-time endpoint.
 
 One WebSocket per client carries everything: sampled camera frames up,
 microphone audio up, and perception updates + assistant audio down. Using a
@@ -47,7 +47,7 @@ from app.perception.tracker import ObjectTracker
 from app.perception.world_model import WorldModel
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("sfcc.backend")
+logger = logging.getLogger("vidi.backend")
 
 settings = get_settings()
 
@@ -112,7 +112,7 @@ async def lifespan(app: FastAPI):
         _memory_store = None
 
 
-app = FastAPI(title="SFCC Assistive Agent Backend", version="0.3.0", lifespan=lifespan)
+app = FastAPI(title="Vidi Assistive Agent Backend", version="0.3.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -138,7 +138,7 @@ async def health() -> dict:
     """Health + real measured perception numbers. Never reports a secret."""
     return {
         "status": "ok",
-        "service": "sfcc-backend",
+        "service": "vidi-backend",
         "gemini_configured": settings.gemini_configured,
         "vision_available": _shared_detector is not None,
         "vision_backend": _shared_detector.backend.name if _shared_detector else None,
@@ -151,6 +151,7 @@ async def health() -> dict:
         "personality": True,
         "crowd_analysis": True,
         "haptics": True,
+        "door_detection": settings.gemini_configured,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -178,6 +179,7 @@ class ClientSession:
                 world_model=self.world,
                 recognition=_recognition,
                 depth=_shared_depth,
+                door_api_key=settings.gemini_api_key,
             )
         self.registry = ToolRegistry(
             self.world,
@@ -190,6 +192,7 @@ class ClientSession:
         )
         self.announcer = ProactiveAnnouncer()
         self._ocr_task: Optional[asyncio.Task] = None
+        self._ocr_ticks = 0
         self.agent_is_speaking = False
         self.voice: Optional[LiveVoiceSession] = None
         self.frames_received = 0
@@ -290,6 +293,8 @@ class ClientSession:
                 ],
                 "stats": self.pipeline.stats.snapshot(),
                 "crowd": result.crowd.payload() if result.crowd else None,
+                "obstacles": [o.payload() for o in getattr(result, "obstacle_alerts", [])],
+                "doors": [d.payload() for d in self.pipeline.door_tracker.current()],
                 "friends": [f.payload() for f in self.pipeline.friend_tracker.visible()],
                 "faces_seen": result.faces_seen,
                 "face_ms": result.face_ms,
@@ -302,6 +307,9 @@ class ClientSession:
     # OCR costs ~934ms, so it runs far slower than detection. 3s is frequent
     # enough to catch a sign while walking past it, without pinning a core.
     OCR_INTERVAL_S = 3.0
+    # Doors cost a Gemini call each, so they sweep far more slowly than OCR
+    # and only while the camera is actually delivering frames.
+    DOOR_INTERVAL_S = 12.0
 
     async def _ocr_loop(self) -> None:
         """
@@ -321,6 +329,27 @@ class ClientSession:
                 except Exception:  # noqa: BLE001 - a bad pass must not kill the loop
                     logger.exception("OCR pass failed")
                     continue
+
+                # Door sweep on its own slower cadence, sharing this loop.
+                self._ocr_ticks += 1
+                if (
+                    self.pipeline.doors_available
+                    and self._ocr_ticks % max(1, int(self.DOOR_INTERVAL_S / self.OCR_INTERVAL_S)) == 0
+                ):
+                    try:
+                        _doors, door_events = await self.pipeline.scan_doors()
+                        for _event_type, door, spoken in door_events:
+                            await self.dispatch_event(WorldEvent(
+                                type=EventType.OBJECT_DETECTED,
+                                severity=Severity.NAVIGATION if door.is_exit
+                                else Severity.ENVIRONMENT,
+                                key="door:" + door.key + ":" + door.state.value,
+                                summary=spoken,
+                                confidence=door.confidence,
+                                data={"door": door.payload()},
+                            ))
+                    except Exception:  # noqa: BLE001
+                        logger.exception("door sweep failed")
 
                 if regions:
                     await self.send(
@@ -370,6 +399,18 @@ class ClientSession:
     # ---------------- world events -> speech/haptics (Parts 36, 48, 49) ----------------
 
     async def _publish_perception_events(self, result) -> None:
+        # Obstacles first, and at SAFETY severity: AttentionManager routes
+        # these past every cooldown, preference and quiet-mode setting.
+        for obstacle in getattr(result, "obstacle_alerts", []):
+            await self.dispatch_event(WorldEvent(
+                type=EventType.OBSTACLE_DETECTED,
+                severity=Severity.SAFETY if obstacle.urgent else Severity.NAVIGATION,
+                key="obstacle:" + obstacle.entity_id,
+                summary=obstacle.describe(),
+                confidence=obstacle.detection_confidence,
+                data={"obstacle": obstacle.payload()},
+            ))
+
         for event_type, summary in result.crowd_events:
             await self.dispatch_event(WorldEvent(
                 type=event_type,
@@ -651,7 +692,7 @@ class ClientSession:
         {
             "list_saved_memories", "get_tasks", "describe_scene", "count_people",
             "recall", "list_enrolled", "find_signs", "who_is_here",
-            "identify_belongings",
+            "identify_belongings", "check_path", "describe_doors", "find_exit",
         }
     )
 
@@ -734,7 +775,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             {
                 "type": "health",
                 "status": "ok",
-                "service": "sfcc-backend",
+                "service": "vidi-backend",
                 "vision_available": session.pipeline is not None,
                 "vision_backend": _shared_detector.backend.name if _shared_detector else None,
                 "voice_available": settings.gemini_configured,

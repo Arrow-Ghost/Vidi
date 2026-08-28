@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional
 
 from app.agent.tools import DIRECTION_PHRASE
 
-logger = logging.getLogger("sfcc.agent.recognition_tools")
+logger = logging.getLogger("vidi.agent.recognition_tools")
 
 
 def register_recognition_tools(registry, pipeline, recognition, store) -> None:

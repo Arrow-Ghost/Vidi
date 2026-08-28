@@ -24,7 +24,7 @@ from typing import List, Optional
 
 import httpx
 
-logger = logging.getLogger("sfcc.memory.embeddings")
+logger = logging.getLogger("vidi.memory.embeddings")
 
 EMBED_MODEL = "gemini-embedding-001"
 EMBED_URL = (

@@ -33,7 +33,7 @@ from typing import List, Optional
 
 import numpy as np
 
-logger = logging.getLogger("sfcc.perception.runtime")
+logger = logging.getLogger("vidi.perception.runtime")
 
 # Measured sweet spot on a contended 4-core machine; see table above.
 ORT_INTRA_OP_THREADS = 2

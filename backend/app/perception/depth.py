@@ -52,7 +52,7 @@ from app.perception.distance import (
     DistanceEstimator,
 )
 
-logger = logging.getLogger("sfcc.perception.depth")
+logger = logging.getLogger("vidi.perception.depth")
 
 DEFAULT_DEPTH_PATH = (
     Path(__file__).resolve().parents[3] / "models" / "weights" / "depth_anything_v2_small.onnx"

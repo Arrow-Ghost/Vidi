@@ -32,7 +32,7 @@ from typing import Any, Dict, List, Optional, Sequence
 from app.events.bus import EventType, Severity, WorldEvent
 from app.profile.personality import PersonalityEngine, Trait
 
-logger = logging.getLogger("sfcc.agent.attention")
+logger = logging.getLogger("vidi.agent.attention")
 
 # Base importance per severity class.
 _IMPORTANCE = {

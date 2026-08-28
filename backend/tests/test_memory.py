@@ -99,8 +99,8 @@ def test_search_returns_nothing_rather_than_a_bad_guess(store):
 
 
 @pytest.mark.skipif(
-    os.environ.get("SFCC_LIVE_TESTS") != "1" or not os.environ.get("GEMINI_API_KEY"),
-    reason="set SFCC_LIVE_TESTS=1 and GEMINI_API_KEY for real semantic search",
+    os.environ.get("VIDI_LIVE_TESTS") != "1" or not os.environ.get("GEMINI_API_KEY"),
+    reason="set VIDI_LIVE_TESTS=1 and GEMINI_API_KEY for real semantic search",
 )
 def test_semantic_search_beats_keyword_matching(tmp_path):
     """

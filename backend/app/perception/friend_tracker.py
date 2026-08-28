@@ -43,7 +43,7 @@ from typing import Any, Deque, Dict, List, Optional, Sequence
 from app.perception.direction import DirectionBucket, _raw_bucket
 from app.perception.faces import SAME_IDENTITY_THRESHOLD
 
-logger = logging.getLogger("sfcc.perception.friend_tracker")
+logger = logging.getLogger("vidi.perception.friend_tracker")
 
 # Agreeing observations required before a name may be spoken (Part 58).
 CONFIRM_FRAMES = 3

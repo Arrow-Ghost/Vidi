@@ -1,4 +1,4 @@
-# SFCC — Assistive Companion for Visually Impaired Users
+# Vidi — Assistive Companion for Visually Impaired Users
 
 A real-time, voice-first AI agent that continuously perceives its user's
 surroundings (objects, people, text, distance, direction) and lets them ask

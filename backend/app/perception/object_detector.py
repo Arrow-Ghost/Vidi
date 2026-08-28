@@ -25,7 +25,7 @@ import numpy as np
 from app.perception.postprocess import postprocess, preprocess
 from app.perception.runtime import InferenceBackend, select_backend
 
-logger = logging.getLogger("sfcc.perception.detector")
+logger = logging.getLogger("vidi.perception.detector")
 
 # Everyday objects relevant to an assistive agent (project brief's minimum
 # list), mapped onto actual COCO class names where they differ.

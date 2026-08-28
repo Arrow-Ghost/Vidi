@@ -28,9 +28,9 @@ from typing import Any, Dict, List, Optional
 
 from app.memory.embeddings import EmbeddingClient, cosine_similarity
 
-logger = logging.getLogger("sfcc.memory.store")
+logger = logging.getLogger("vidi.memory.store")
 
-DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / "data" / "sfcc.db"
+DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / "data" / "vidi.db"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS memories (

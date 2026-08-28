@@ -32,7 +32,7 @@ import websockets
 
 from app.agent.tools import ToolRegistry
 
-logger = logging.getLogger("sfcc.agent.live")
+logger = logging.getLogger("vidi.agent.live")
 
 LIVE_MODEL = "gemini-3.1-flash-live-preview"
 LIVE_URL = (
@@ -145,6 +145,14 @@ class LiveVoiceSession:
         self._ws: Optional[Any] = None
         self._receive_task: Optional[asyncio.Task] = None
         self.connected = False
+        # Reconnection state. A Live session is NOT a permanent thing: the
+        # server ends it when the context window fills, when a preview model
+        # is cycled, or on any network blip. Treating a drop as fatal is what
+        # made the assistant "just stop" mid-conversation.
+        self._closing = False
+        self._resumption_handle: Optional[str] = None
+        self._reconnects = 0
+        self.last_close: Optional[str] = None
 
     def _full_prompt(self) -> str:
         """Safety rules first, then how this particular user likes to be spoken to."""
@@ -163,27 +171,44 @@ class LiveVoiceSession:
     async def connect(self) -> None:
         url = LIVE_URL + "?key=" + self._api_key
         self._ws = await websockets.connect(url, max_size=16 * 1024 * 1024)
-        setup = {
-            "setup": {
-                "model": "models/" + self._model,
-                "generationConfig": {"responseModalities": ["AUDIO"]},
-                "systemInstruction": {"parts": [{"text": self._full_prompt()}]},
-                "tools": [{"functionDeclarations": self._registry.declarations()}],
-                # This model is audio-only; transcripts are what drive the UI
-                # caption track and the developer trace.
-                "inputAudioTranscription": {},
-                "outputAudioTranscription": {},
-            }
+        setup_body = {
+            "model": "models/" + self._model,
+            "generationConfig": {"responseModalities": ["AUDIO"]},
+            "systemInstruction": {"parts": [{"text": self._full_prompt()}]},
+            "tools": [{"functionDeclarations": self._registry.declarations()}],
+            # This model is audio-only; transcripts are what drive the UI
+            # caption track and the developer trace.
+            "inputAudioTranscription": {},
+            "outputAudioTranscription": {},
+            # WITHOUT THIS the server terminates the session once the context
+            # window fills. A session carrying continuous speech plus tool
+            # results reaches that in minutes, and it surfaced to the user as
+            # an abrupt "1008 policy violation - the operation was aborted".
+            # A sliding window lets the conversation run indefinitely.
+            "contextWindowCompression": {"slidingWindow": {}},
+            # Ask for resumption handles so a reconnect continues the SAME
+            # conversation rather than starting a blank one.
+            "sessionResumption": (
+                {"handle": self._resumption_handle} if self._resumption_handle else {}
+            ),
         }
+        setup = {"setup": setup_body}
         await self._ws.send(json.dumps(setup))
         ack = json.loads(await asyncio.wait_for(self._ws.recv(), timeout=20))
         if "setupComplete" not in ack:
             raise RuntimeError("Live API setup rejected: " + json.dumps(ack)[:300])
         self.connected = True
+        self._closing = False
         self._receive_task = asyncio.create_task(self._receive_loop())
-        logger.info("Live session established (model=%s)", self._model)
+        logger.info(
+            "Live session established (model=%s, resumed=%s)",
+            self._model, bool(self._resumption_handle),
+        )
 
     async def close(self) -> None:
+        # Set FIRST: the receive loop checks this to tell a deliberate shutdown
+        # apart from a drop it should reconnect from.
+        self._closing = True
         self.connected = False
         if self._receive_task:
             self._receive_task.cancel()
@@ -270,13 +295,32 @@ class LiveVoiceSession:
             raise
         except websockets.ConnectionClosed as exc:
             self.connected = False
-            await self._emit({"type": "voice_disconnected", "reason": str(exc)[:200]})
+            self.last_close = "%s %s" % (exc.code, str(exc.reason)[:120])
+            if self._closing:
+                return
+            logger.warning("Live session dropped (%s) - reconnecting", self.last_close)
+            await self._reconnect()
         except Exception as exc:  # noqa: BLE001 - surface, never crash the app
             logger.exception("live receive loop failed")
             self.connected = False
             await self._emit({"type": "voice_error", "message": str(exc)[:200]})
 
     async def _handle_message(self, message: Dict[str, Any]) -> None:
+        # The server periodically hands out a handle that can resume this exact
+        # conversation after a drop. Keep the newest one.
+        update = message.get("sessionResumptionUpdate")
+        if update:
+            if update.get("resumable") and update.get("newHandle"):
+                self._resumption_handle = update["newHandle"]
+            return
+
+        # "goAway" is the server telling us it is about to end this connection.
+        # Reconnecting now, before it closes, keeps the changeover silent.
+        if "goAway" in message:
+            logger.info("Live server sent goAway; reconnecting ahead of the close")
+            asyncio.create_task(self._reconnect(graceful=True))
+            return
+
         if "toolCall" in message:
             await self._handle_tool_call(message["toolCall"])
             return
@@ -314,6 +358,61 @@ class LiveVoiceSession:
 
         if server_content.get("turnComplete"):
             await self._emit({"type": "agent_turn_complete"})
+
+    async def _reconnect(self, graceful: bool = False) -> None:
+        """
+        Re-establish the session, transparently.
+
+        The user is blind and mid-conversation; a dropped socket must not
+        require them to find and press a button. Backoff is short because a
+        voice assistant that is silent for 30s is useless, and capped because
+        retrying forever against a genuine outage just hides the failure.
+        """
+        if self._closing:
+            return
+
+        delays = [0.5, 1.0, 2.0, 4.0, 8.0]
+        await self._emit({"type": "voice_reconnecting", "attempt": 1,
+                          "reason": self.last_close or "server closed the session"})
+
+        for attempt, delay in enumerate(delays, start=1):
+            if self._closing:
+                return
+            if graceful and attempt == 1:
+                # Server warned us in advance, so reconnect immediately.
+                pass
+            else:
+                await asyncio.sleep(delay)
+            try:
+                if self._ws is not None:
+                    try:
+                        await self._ws.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    self._ws = None
+                await self.connect()
+                self._reconnects += 1
+                logger.info("Live session reconnected (attempt %d)", attempt)
+                await self._emit({
+                    "type": "voice_ready",
+                    "model": self._model,
+                    "reconnected": True,
+                    "resumed": bool(self._resumption_handle),
+                })
+                return
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("reconnect attempt %d failed: %s", attempt, str(exc)[:120])
+                await self._emit({"type": "voice_reconnecting", "attempt": attempt + 1,
+                                  "reason": str(exc)[:120]})
+
+        self.connected = False
+        await self._emit({
+            "type": "voice_error",
+            "message": (
+                "The voice connection dropped and could not be re-established. "
+                "Press Start assistant to try again."
+            ),
+        })
 
     async def _handle_tool_call(self, tool_call: Dict[str, Any]) -> None:
         """

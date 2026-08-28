@@ -23,7 +23,7 @@ from app.agent import vocabulary
 from app.perception.distance import DistanceRange
 from app.perception.world_model import Entity, WorldModel
 
-logger = logging.getLogger("sfcc.agent.tools")
+logger = logging.getLogger("vidi.agent.tools")
 
 DEFAULT_TOOL_TIMEOUT_S = 5.0
 
@@ -134,6 +134,10 @@ class ToolRegistry:
             from app.agent.social_tools import register_social_tools
 
             register_social_tools(self, pipeline, recommendations, store)
+        if pipeline is not None:
+            from app.agent.navigation_tools import register_navigation_tools
+
+            register_navigation_tools(self, pipeline)
 
     # ---------------- registry plumbing ----------------
 

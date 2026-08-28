@@ -100,7 +100,7 @@ export type ServerMessage =
   | { type: 'agent_transcript'; text: string }
   | { type: 'agent_audio'; data: string; sample_rate: number }
   | { type: 'agent_turn_complete' }
-  | { type: 'voice_ready'; model: string }
+  | { type: 'voice_ready'; model: string; reconnected?: boolean; resumed?: boolean }
   | { type: 'voice_stopped' }
   | { type: 'voice_interrupted' }
   | { type: 'voice_error'; message: string }
@@ -123,6 +123,7 @@ export type ServerMessage =
       directional: boolean; duration_ms: number; intensity: number; note?: string }
   | { type: 'haptic_status'; enabled: boolean; provider: string; connected: boolean;
       supports_direction: boolean; fired: number; suppressed: number }
+  | { type: 'voice_reconnecting'; attempt: number; reason: string }
   | { type: 'quiet_mode'; enabled: boolean }
   | { type: 'memory_cleared'; deleted_count: number }
   | { type: 'pong' }

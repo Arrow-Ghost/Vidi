@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Awaitable, Callable, Deque, Dict, List, Optional
 
-logger = logging.getLogger("sfcc.events")
+logger = logging.getLogger("vidi.events")
 
 
 class EventType(str, Enum):

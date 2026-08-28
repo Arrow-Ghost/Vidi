@@ -34,7 +34,7 @@ import numpy as np
 
 from app.perception.direction import DirectionBucket, _raw_bucket
 
-logger = logging.getLogger("sfcc.perception.ocr")
+logger = logging.getLogger("vidi.perception.ocr")
 
 # Below this the read is treated as unreliable and discarded. PP-OCR returns
 # well-calibrated scores; 0.6 keeps confident reads and drops noise/artifacts.

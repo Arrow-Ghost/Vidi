@@ -30,13 +30,15 @@ import numpy as np
 
 from app.perception.crowd import CrowdDetectionEngine, CrowdState
 from app.perception.depth import DepthEstimator, DepthMap
+from app.perception.doors import DoorDetector, DoorTracker, scene_changed
+from app.perception.obstacles import ObstacleMonitor
 from app.perception.friend_tracker import FriendTracker
 from app.perception.ocr import SignTracker, TextReader, TextRegion, TrackedSign
 from app.perception.object_detector import Detection, ObjectDetector
 from app.perception.tracker import ObjectTracker, TrackEventRecord
 from app.perception.world_model import Entity, WorldModel
 
-logger = logging.getLogger("sfcc.perception.pipeline")
+logger = logging.getLogger("vidi.perception.pipeline")
 
 
 class FrameDecodeError(ValueError):
@@ -79,6 +81,7 @@ class PerceptionResult:
     depth_age_s: Optional[float] = None
     crowd: Optional[CrowdState] = None
     crowd_events: List[tuple] = field(default_factory=list)
+    obstacle_alerts: List[object] = field(default_factory=list)
     friend_events: List[tuple] = field(default_factory=list)
     faces_seen: int = 0
     face_ms: Optional[float] = None
@@ -137,6 +140,7 @@ class PerceptionPipeline:
         enable_depth: bool = True,
         enable_ocr: bool = True,
         recognition: Optional[object] = None,
+        door_api_key: Optional[str] = None,
     ) -> None:
         self.detector = detector or ObjectDetector()
         self.tracker = tracker or ObjectTracker()
@@ -148,6 +152,16 @@ class PerceptionPipeline:
         # against the latest frame rather than inside the detection loop.
         # Crowd analysis is nearly free: it reads the person tracks the
         # detector already produced, so it runs every frame.
+        # Proximity alerts read the world model the detector already fills,
+        # so they cost nothing extra and can run on every frame.
+        self.obstacle_monitor = ObstacleMonitor()
+        # Doors need Gemini (COCO has no door class), so they run on a slow
+        # sweep and on demand - never per frame.
+        self.door_detector = DoorDetector(door_api_key)
+        self.door_tracker = DoorTracker()
+        self._door_lock = asyncio.Lock()
+        self._last_door_frame = None
+        self.door_sweeps_skipped = 0
         self.crowd_engine = CrowdDetectionEngine()
         self.friend_tracker = FriendTracker()
         # Face recognition is only triggered when people are actually in
@@ -190,6 +204,9 @@ class PerceptionPipeline:
         )
         depth_age = self._depth_map.age_s() if self._depth_map else None
 
+        # ---- obstacles in the user's path ----
+        obstacle_alerts = self.obstacle_monitor.poll(list(self.world.entities.values()))
+
         # ---- crowd (Parts 23-32) ----
         person_tracks = [t for t in self.tracker.tracks.values() if t.class_name == "person"]
         crowd_state, crowd_events = self.crowd_engine.update(person_tracks, width, height)
@@ -219,6 +236,7 @@ class PerceptionPipeline:
         return (
             detections, events, width, height, depth_ms, depth_age,
             crowd_state, crowd_events, friend_events, faces_seen, face_ms,
+            obstacle_alerts,
         )
 
     async def process(self, frame: np.ndarray, seq: Optional[int] = None) -> PerceptionResult:
@@ -232,6 +250,7 @@ class PerceptionPipeline:
             (
                 detections, events, width, height, depth_ms, depth_age,
                 crowd_state, crowd_events, friend_events, faces_seen, face_ms,
+                obstacle_alerts,
             ) = await loop.run_in_executor(None, self._process_sync, frame)
         latency_ms = (time.perf_counter() - started) * 1000
         self.stats.record(latency_ms)
@@ -247,6 +266,7 @@ class PerceptionPipeline:
             depth_age_s=round(depth_age, 2) if depth_age is not None else None,
             crowd=crowd_state,
             crowd_events=crowd_events,
+            obstacle_alerts=obstacle_alerts,
             friend_events=friend_events,
             faces_seen=faces_seen,
             face_ms=round(face_ms, 1) if face_ms else None,
@@ -293,3 +313,35 @@ class PerceptionPipeline:
     def current_frame(self) -> Optional[np.ndarray]:
         """Latest frame, for on-demand deep reading by the vision LLM."""
         return self._last_frame
+
+
+    # ---------------- doors and exits ----------------
+
+    @property
+    def doors_available(self) -> bool:
+        return self.door_detector.available
+
+    async def scan_doors(self, force: bool = False) -> tuple:
+        """
+        One Gemini door sweep over the latest frame.
+
+        Serialized under its own lock: a sweep costs ~3.4s and money, and two
+        overlapping sweeps would double the bill for a worse answer. If one is
+        already running we return the tracker's current view instead.
+        """
+        if not self.doors_available or self._last_frame is None:
+            return [], []
+        if self._door_lock.locked():
+            return self.door_tracker.current(), []
+
+        async with self._door_lock:
+            frame = self._last_frame
+            if not force and not scene_changed(self._last_door_frame, frame):
+                # Same view as the last sweep - the answer cannot have changed,
+                # so do not pay for it again.
+                self.door_sweeps_skipped += 1
+                return self.door_tracker.current(), []
+            self._last_door_frame = frame
+            doors = await self.door_detector.detect(frame)
+            events = self.door_tracker.update(doors)
+            return doors, events

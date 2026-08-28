@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional
 
 from app.agent.tools import DIRECTION_PHRASE
 
-logger = logging.getLogger("sfcc.agent.ocr_tools")
+logger = logging.getLogger("vidi.agent.ocr_tools")
 
 # Below this a local read is reported as "there is text but I can't read it"
 # rather than spoken as fact.
