@@ -54,14 +54,38 @@ def detect_lan_ip() -> str:
 
 
 def all_candidate_ips() -> list:
+    """
+    EVERY IPv4 address on this machine.
+
+    Deliberately thorough. DHCP hands out a new address whenever you rejoin a
+    network, and a certificate that covers only the address seen at generation
+    time silently stops working — the phone reports "cannot connect" with no
+    hint that the cause is a stale SAN list. Covering every interface means one
+    certificate keeps working across reconnects and network changes.
+    """
     ips = set()
+    try:
+        import psutil
+
+        for addresses in psutil.net_if_addrs().values():
+            for address in addresses:
+                if getattr(address, "family", None) == socket.AF_INET:
+                    ips.add(address.address)
+    except Exception:
+        pass
+
     try:
         for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
             ips.add(info[4][0])
     except socket.gaierror:
         pass
+
     ips.add(detect_lan_ip())
-    return sorted(i for i in ips if not i.startswith("127."))
+    # Link-local 169.254.x is never reachable from a phone; keep the list clean.
+    return sorted(
+        i for i in ips
+        if not i.startswith("127.") and not i.startswith("169.254.")
+    )
 
 
 def generate_cert(lan_ip: str, extra_ips: list) -> None:
@@ -144,11 +168,12 @@ def main() -> int:
         print("Could not find a LAN address. Is Wi-Fi connected?")
         return 1
 
-    print("Detected LAN address : " + lan_ip)
-    if len(extras) > 1:
-        print("Other addresses      : " + ", ".join(a for a in extras if a != lan_ip))
-        print("  (virtual adapters are included in the certificate but are not")
-        print("   the one your phone should use)")
+    print("Detected LAN address : " + lan_ip + "   <- use this one on the phone")
+    others = [a for a in extras if a != lan_ip]
+    if others:
+        print("Also covered by cert : " + ", ".join(others))
+        print("  (virtual/secondary adapters - included so the certificate keeps")
+        print("   working if your address changes, but not what the phone uses)")
 
     try:
         generate_cert(lan_ip, extras)
