@@ -1,0 +1,1319 @@
+---
+// Only an explicit override is baked in at build time. Everything else is
+// resolved in the browser from window.location, because a hardcoded host
+// breaks the moment the page is opened from another device: on a phone,
+// 127.0.0.1 means the PHONE, not this machine.
+const backendWsOverride = import.meta.env.PUBLIC_BACKEND_WS_URL ?? '';
+const backendPort = import.meta.env.PUBLIC_BACKEND_PORT ?? '8000';
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b1220" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>SFCC — Assistive Agent</title>
+  </head>
+  <body data-ws={backendWsOverride} data-backend-port={backendPort}>
+    <a class="skip" href="#conversation">Skip to conversation</a>
+
+    <header>
+      <h1>SFCC Assistive Agent</h1>
+      <div class="badges">
+        <span class="badge" id="conn-badge" data-state="connecting">connecting</span>
+        <span class="badge" id="vision-badge">vision: —</span>
+        <span class="badge" id="voice-badge">voice: —</span>
+      </div>
+    </header>
+
+    <main>
+      <!-- ============ PRIMARY CONTROLS ============ -->
+      <section class="panel controls" aria-label="Assistant controls">
+        <button id="btn-start" class="primary">Start assistant</button>
+        <button id="btn-stop" class="secondary" disabled>Stop</button>
+        <button id="btn-mute" class="secondary" disabled aria-pressed="false">Mute mic</button>
+        <div class="level" aria-hidden="true"><div id="level-fill"></div></div>
+        <p class="hint" id="agent-state" role="status" aria-live="polite">Idle.</p>
+      </section>
+
+      <div class="grid">
+        <!-- ============ LIVE ENVIRONMENT ============ -->
+        <section class="panel" aria-label="Live camera and detections">
+          <h2>Live environment</h2>
+          <div class="stage">
+            <video id="video" playsinline muted></video>
+            <canvas id="overlay"></canvas>
+            <p class="placeholder" id="cam-placeholder">Camera off</p>
+          </div>
+          <dl class="stats">
+            <div><dt>Backend</dt><dd id="stat-backend">—</dd></div>
+            <div><dt>Perception p50</dt><dd id="stat-p50">—</dd></div>
+            <div><dt>Effective FPS</dt><dd id="stat-fps">—</dd></div>
+            <div><dt>Depth model</dt><dd id="stat-depth">—</dd></div>
+            <div><dt>Frames dropped</dt><dd id="stat-dropped">0</dd></div>
+          </dl>
+        </section>
+
+        <!-- ============ CONVERSATION ============ -->
+        <section class="panel" id="conversation" aria-label="Conversation">
+          <h2>Conversation</h2>
+          <div class="transcript" id="transcript" role="log" aria-live="polite" aria-atomic="false">
+            <p class="empty">Press <strong>Start assistant</strong>, then just talk.</p>
+          </div>
+          <form id="text-form" class="text-input">
+            <label class="visually-hidden" for="text-entry">Type a message instead of speaking</label>
+            <input id="text-entry" type="text" placeholder="…or type here" autocomplete="off" />
+            <button type="submit" class="secondary">Send</button>
+          </form>
+        </section>
+
+        <!-- ============ WORLD MODEL ============ -->
+        <section class="panel" aria-label="What the system currently perceives">
+          <h2>World model</h2>
+          <p class="hint">Everything the assistant is allowed to say comes from here.</p>
+          <ul class="entities" id="entities"><li class="empty">Nothing detected.</li></ul>
+        </section>
+
+        <!-- ============ AGENT TRACE ============ -->
+        <section class="panel" aria-label="Agent execution trace">
+          <h2>Agent trace</h2>
+          <p class="hint">Every tool call and its real result — no step is inferred.</p>
+          <ol class="trace" id="trace"><li class="empty">No tool calls yet.</li></ol>
+        </section>
+
+        <!-- ============ MEMORY & TASKS ============ -->
+        <section class="panel" aria-label="Saved memory and tasks">
+          <h2>Memory &amp; tasks</h2>
+          <p class="hint">
+            Only what you explicitly asked to be remembered. Nothing is stored automatically.
+          </p>
+          <div class="mem-actions">
+            <button id="btn-refresh-memory" class="secondary">Refresh</button>
+            <button id="btn-forget-all" class="danger">Forget all memories</button>
+          </div>
+          <ul class="entities" id="memories"><li class="empty">Nothing saved.</li></ul>
+        </section>
+
+        <!-- ============ SIGNS / TEXT ============ -->
+        <section class="panel" aria-label="Signs and text the camera can read">
+          <h2>Signs &amp; text</h2>
+          <p class="hint">
+            Read continuously by the offline engine. Warnings and directions come
+            first; the assistant only speaks up unprompted for those.
+          </p>
+          <ul class="entities" id="signs"><li class="empty">No text detected.</li></ul>
+        </section>
+
+        <!-- ============ ENROLLMENT ============ -->
+        <section class="panel" aria-label="People and belongings you have enrolled">
+          <h2>People &amp; belongings</h2>
+          <p class="hint">
+            The assistant can only name people and items you add here. Faces you
+            never enrol are never identified. Photos are converted to a numeric
+            signature and are <strong>not</strong> stored.
+          </p>
+
+          <form id="enroll-form" class="enroll">
+            <div class="enroll-row">
+              <label class="visually-hidden" for="enroll-kind">What are you adding?</label>
+              <select id="enroll-kind">
+                <option value="person">Person</option>
+                <option value="belonging">Belonging</option>
+              </select>
+
+              <label class="visually-hidden" for="enroll-name">Name</label>
+              <input id="enroll-name" type="text" placeholder="Name (e.g. Rahul)" autocomplete="off" required />
+
+              <label class="visually-hidden" for="enroll-class">Object type</label>
+              <select id="enroll-class" hidden>
+                <option value="backpack">backpack</option>
+                <option value="handbag">handbag</option>
+                <option value="suitcase">suitcase</option>
+                <option value="bottle">bottle</option>
+                <option value="cup">cup</option>
+                <option value="laptop">laptop</option>
+                <option value="cell phone">phone</option>
+                <option value="book">book</option>
+                <option value="umbrella">umbrella</option>
+              </select>
+            </div>
+
+            <div class="enroll-row">
+              <label class="file-btn" for="enroll-file">Choose photo</label>
+              <input id="enroll-file" type="file" accept="image/*" />
+              <span class="hint" id="enroll-filename">No photo chosen - will use the live camera.</span>
+              <button type="submit" class="primary">Add</button>
+            </div>
+            <p class="hint" id="enroll-status" role="status" aria-live="polite"></p>
+          </form>
+
+          <ul class="entities" id="enrollments"><li class="empty">Nobody enrolled yet.</li></ul>
+        </section>
+
+        <!-- ============ PERSONALITY (Part 67) ============ -->
+        <section class="panel" aria-label="Your profile and how it changes the assistant">
+          <h2>You &amp; your preferences</h2>
+          <p class="hint">
+            Set by what you tell the assistant. These are preferences, not an
+            assessment &mdash; and none of them can silence a safety alert.
+          </p>
+          <p class="profile-name" id="profile-name">No name set</p>
+          <ul class="traits" id="traits"><li class="empty">No preferences set yet.</li></ul>
+          <dl class="stats" id="behaviour-stats"></dl>
+          <form id="profile-form" class="enroll">
+            <div class="enroll-row">
+              <label class="visually-hidden" for="profile-name-input">Your name</label>
+              <input id="profile-name-input" type="text" placeholder="Your name" autocomplete="off" />
+              <button type="submit" class="secondary">Save name</button>
+            </div>
+            <div class="enroll-row">
+              <span class="hint">Quick profiles:</span>
+              <button type="button" class="secondary tiny" data-persona="social">Extrovert · Explorer · Nature</button>
+              <button type="button" class="secondary tiny" data-persona="quiet">Introvert · Calm</button>
+              <button type="button" class="secondary tiny" data-persona="practical">Practical · Minimal</button>
+            </div>
+          </form>
+          <div class="mem-actions">
+            <button id="btn-quiet" class="secondary" aria-pressed="false">Quiet mode</button>
+            <button id="btn-refresh-profile" class="secondary">Refresh</button>
+            <button id="btn-reset-profile" class="danger tiny">Reset profile</button>
+          </div>
+        </section>
+
+        <!-- ============ CROWD + FRIENDS ============ -->
+        <section class="panel" aria-label="Crowd and people you know">
+          <h2>Crowd &amp; friends</h2>
+          <p class="hint">
+            Counts are approximate &mdash; people hidden behind others are not
+            detected. Directions are relative to you.
+          </p>
+          <dl class="stats" id="crowd-stats"></dl>
+          <ul class="entities" id="friends"><li class="empty">No enrolled friends in view.</li></ul>
+        </section>
+
+        <!-- ============ ATTENTION + HAPTICS ============ -->
+        <section class="panel" aria-label="Why the assistant spoke or stayed quiet">
+          <h2>Attention &amp; haptics</h2>
+          <p class="hint" id="haptic-provider">Haptics: detecting&hellip;</p>
+          <div class="mem-actions">
+            <button id="btn-test-haptic" class="secondary">Test buzz</button>
+            <button id="btn-demo" class="secondary">Run demo scene</button>
+          </div>
+          <ol class="trace" id="attention"><li class="empty">No decisions yet.</li></ol>
+        </section>
+      </div>
+    </main>
+
+    <script>
+      import { CameraSource } from '../lib/camera/CameraSource';
+      import { FrameSampler } from '../lib/camera/FrameSampler';
+      import { MicCapture } from '../lib/audio/MicCapture';
+      import { AudioPlayer } from '../lib/audio/AudioPlayer';
+      import { AgentClient } from '../lib/agent/AgentClient';
+      import type { ServerMessage, DetectionBox } from '../lib/agent/AgentClient';
+
+      /**
+       * Work out where the backend is from where THIS page came from.
+       *
+       * Opened on a phone at https://10.165.175.2:4321, the backend is at
+       * wss://10.165.175.2:8000 — not localhost, which would be the phone.
+       * The scheme must match too: a page served over HTTPS cannot open an
+       * insecure ws:// socket, browsers block it as mixed content.
+       */
+      function resolveBackendUrl(): string {
+        const override = document.body.dataset.ws;
+        if (override) return override;
+        const secure = window.location.protocol === 'https:';
+        const port = document.body.dataset.backendPort || '8000';
+        return (secure ? 'wss://' : 'ws://') + window.location.hostname + ':' + port + '/ws';
+      }
+
+      const wsUrl = resolveBackendUrl();
+
+      const $ = (id: string) => document.getElementById(id)!;
+      const video = $('video') as HTMLVideoElement;
+      const overlay = $('overlay') as HTMLCanvasElement;
+      const transcriptEl = $('transcript');
+      const traceEl = $('trace');
+      const entitiesEl = $('entities');
+      const memoriesEl = $('memories');
+      const signsEl = $('signs');
+      const enrollmentsEl = $('enrollments');
+      const traitsEl = $('traits');
+      const friendsEl = $('friends');
+      const attentionEl = $('attention');
+
+      const camera = new CameraSource({ width: 640, height: 480 });
+      // 6 FPS to the backend: perception measures ~28 FPS capacity, so this
+      // leaves generous headroom for the voice stream on the same socket
+      // while still feeling instantaneous for "what's in front of me".
+      const sampler = new FrameSampler({ targetFps: 6, maxInFlight: 2 });
+      const player = new AudioPlayer({
+        onStateChange: (s) => setAgentState(s === 'speaking' ? 'Assistant speaking…' : 'Listening…'),
+      });
+
+      let mic: MicCapture | null = null;
+      let captureCanvas: HTMLCanvasElement | null = null;
+      let rafHandle = 0;
+      let running = false;
+      let agentLine: HTMLParagraphElement | null = null;
+      let userLine: HTMLParagraphElement | null = null;
+
+      // ---------- small UI helpers ----------
+      function setAgentState(text: string) { $('agent-state').textContent = text; }
+
+      function badge(id: string, text: string, state?: string) {
+        const el = $(id);
+        el.textContent = text;
+        if (state) el.dataset.state = state;
+      }
+
+      function clearEmpty(container: HTMLElement) {
+        container.querySelector('.empty')?.remove();
+      }
+
+      function appendLine(role: 'user' | 'agent', text: string): HTMLParagraphElement {
+        clearEmpty(transcriptEl);
+        const p = document.createElement('p');
+        p.className = 'line ' + role;
+        p.innerHTML = '<span class="who">' + (role === 'user' ? 'You' : 'Assistant') + '</span>';
+        p.append(document.createTextNode(text));
+        transcriptEl.append(p);
+        transcriptEl.scrollTop = transcriptEl.scrollHeight;
+        return p;
+      }
+
+      /**
+       * On a phone, collapse the developer panels so the page opens on the
+       * controls, the camera and the conversation instead of a long scroll.
+       * Tapping a heading toggles one. Desktop is untouched.
+       */
+      const PHONE = window.matchMedia('(max-width: 720px)');
+
+      function applyPanelCollapsing(isPhone: boolean) {
+        const keep = new Set(['Live camera and detections', 'Conversation', 'Assistant controls']);
+        document.querySelectorAll('main .panel').forEach((panel) => {
+          const label = panel.getAttribute('aria-label') ?? '';
+          const heading = panel.querySelector('h2');
+          if (!heading || keep.has(label)) return;
+
+          if (!isPhone) {
+            panel.classList.remove('collapsible', 'closed');
+            heading.removeAttribute('role');
+            heading.removeAttribute('tabindex');
+            heading.removeAttribute('aria-expanded');
+            return;
+          }
+
+          panel.classList.add('collapsible');
+          if (!panel.classList.contains('was-opened')) panel.classList.add('closed');
+          heading.setAttribute('role', 'button');
+          heading.setAttribute('tabindex', '0');
+          heading.setAttribute('aria-expanded', String(!panel.classList.contains('closed')));
+
+          if (!(heading as any).__bound) {
+            (heading as any).__bound = true;
+            const toggle = () => {
+              panel.classList.toggle('closed');
+              panel.classList.add('was-opened');
+              heading.setAttribute('aria-expanded', String(!panel.classList.contains('closed')));
+            };
+            heading.addEventListener('click', toggle);
+            heading.addEventListener('keydown', (event) => {
+              const key = (event as KeyboardEvent).key;
+              if (key === 'Enter' || key === ' ') {
+                event.preventDefault();
+                toggle();
+              }
+            });
+          }
+        });
+      }
+
+      applyPanelCollapsing(PHONE.matches);
+      PHONE.addEventListener('change', (e) => applyPanelCollapsing(e.matches));
+
+      // ---------- websocket ----------
+      const client = new AgentClient(wsUrl, {
+        onStateChange: (state) => {
+          badge('conn-badge', state, state);
+          // Clearing the message on 'open' matters: without it the page kept
+          // showing "Backend unreachable" after a successful (re)connect,
+          // which for a screen-reader user is an outright false statement
+          // about whether the assistant is usable.
+          if (state === 'open') {
+            setAgentState(running ? 'Listening…' : 'Connected. Press Start assistant.');
+            refreshMemory();
+            client.send({ type: 'list_enrollments' });
+            client.send({ type: 'get_profile' });
+            void setUpHaptics(false);
+          } else if (state === 'connecting') {
+            setAgentState('Connecting to backend…');
+          } else {
+            setAgentState('Backend unreachable. Retrying…');
+          }
+        },
+        onMessage: handleMessage,
+      });
+      client.connect();
+
+      function handleMessage(message: ServerMessage) {
+        switch (message.type) {
+          case 'health':
+            badge('vision-badge', 'vision: ' + (message.vision_available ? 'ready' : 'unavailable'),
+                  message.vision_available ? 'ok' : 'error');
+            badge('voice-badge', 'voice: ' + (message.voice_available ? 'ready' : 'no API key'),
+                  message.voice_available ? 'ok' : 'error');
+            $('stat-backend').textContent = message.vision_backend ?? '—';
+            break;
+
+          case 'perception':
+            sampler.markAcked();
+            drawBoxes(message.boxes, message.image.width, message.image.height);
+            renderEntities(message.entities);
+            $('stat-p50').textContent = message.stats.p50_ms ? message.stats.p50_ms + ' ms' : '—';
+            $('stat-fps').textContent = message.stats.effective_fps
+              ? String(message.stats.effective_fps) : '—';
+            $('stat-dropped').textContent = String(message.frames_dropped ?? 0);
+            renderCrowd(message.crowd, message.faces_seen, message.face_ms);
+            renderFriends(message.friends ?? []);
+            // depth_ms is only present on frames where depth actually ran; in
+            // between, show the age of the map still being reused so a stale
+            // depth reading is visible rather than silently assumed fresh.
+            if (message.depth_ms) {
+              $('stat-depth').textContent = message.depth_ms + ' ms';
+            } else if (message.depth_age_s !== null && message.depth_age_s !== undefined) {
+              $('stat-depth').textContent = 'reused (' + message.depth_age_s + 's old)';
+            } else {
+              $('stat-depth').textContent = 'off';
+            }
+            break;
+
+          case 'frame_ack':
+            sampler.markAcked();
+            if (message.frames_dropped !== undefined) {
+              $('stat-dropped').textContent = String(message.frames_dropped);
+            }
+            break;
+
+          case 'user_transcript':
+            // Transcripts stream in fragments; keep appending to one line
+            // until the turn ends rather than spamming a line per fragment.
+            if (!userLine) userLine = appendLine('user', message.text);
+            else userLine.append(document.createTextNode(message.text));
+            break;
+
+          case 'agent_transcript':
+            if (!agentLine) agentLine = appendLine('agent', message.text);
+            else agentLine.append(document.createTextNode(message.text));
+            break;
+
+          case 'agent_audio':
+            player.enqueue(message.data);
+            userLine = null;   // the user's turn is over once the agent speaks
+            break;
+
+          case 'agent_turn_complete':
+            agentLine = null;
+            userLine = null;
+            setAgentState('Listening…');
+            break;
+
+          case 'voice_interrupted':
+            player.interrupt();
+            agentLine = null;
+            setAgentState('Interrupted — listening.');
+            break;
+
+          case 'tool_call':
+            addTrace('call', message.tool, JSON.stringify(message.args));
+            break;
+
+          case 'tool_result':
+            addTrace('result', message.tool, summarizeResult(message.result));
+            // Keep the memory panel in step with what the agent just did, so
+            // the user can see exactly what is stored about them.
+            if (MEMORY_TOOLS.has(message.tool)) renderMemory(message.result);
+            break;
+
+          case 'voice_ready':
+            setAgentState('Listening… (' + message.model + ')');
+            break;
+
+          case 'voice_error':
+            setAgentState('Voice error: ' + message.message);
+            break;
+
+          case 'voice_disconnected':
+            setAgentState('Voice disconnected: ' + message.reason);
+            break;
+
+          case 'signs':
+            renderSigns(message.regions, message.tracked);
+            break;
+
+          case 'proactive_announcement':
+            // The assistant is about to say this out loud; surface it too so a
+            // sighted helper can see exactly why it spoke.
+            addTrace('result', 'announced',
+              message.signs.map((sg) => sg.text + ' (' + sg.direction + ')').join(', '));
+            break;
+
+          case 'enrollments':
+            renderEnrollments(message.records);
+            break;
+
+          case 'enroll_result':
+            $('enroll-status').textContent = message.message ?? '';
+            if (message.ok) {
+              ($('enroll-form') as HTMLFormElement).reset();
+              $('enroll-filename').textContent = 'No photo chosen - will use the live camera.';
+              pendingPhoto = null;
+              ($('enroll-class') as HTMLSelectElement).hidden = true;
+            }
+            break;
+
+          case 'enrollment_deleted':
+            $('enroll-status').textContent =
+              message.deleted_count > 0
+                ? 'Deleted ' + message.name + '.'
+                : 'Nothing was stored for ' + message.name + '.';
+            break;
+
+          case 'profile':
+            renderProfile(message);
+            break;
+
+          case 'attention_decision':
+            renderAttention(message);
+            break;
+
+          case 'haptic':
+            playHaptic(message);
+            break;
+
+          case 'haptic_status':
+            $('haptic-provider').textContent =
+              'Haptics: ' + message.provider
+              + (message.connected ? ' (connected)' : ' (not connected)')
+              + (message.supports_direction ? ' · directional' : ' · no direction')
+              + ' · ' + message.fired + ' fired, ' + message.suppressed + ' suppressed';
+            break;
+
+          case 'quiet_mode': {
+            const button = $('btn-quiet');
+            button.setAttribute('aria-pressed', String(message.enabled));
+            button.textContent = message.enabled ? 'Quiet mode ON' : 'Quiet mode';
+            break;
+          }
+
+          case 'memory_cleared':
+            memoryState.memories = [];
+            drawMemoryPanel();
+            setAgentState('Cleared ' + message.deleted_count + ' saved memories.');
+            break;
+
+          case 'error':
+            console.warn('backend error', message.message);
+            break;
+        }
+      }
+
+      function summarizeResult(result: Record<string, any>): string {
+        if (result.error) return 'ERROR ' + result.error;
+        if (result.found === false) return 'not visible' + (result.supported === false ? ' (unsupported)' : '');
+        if (result.candidates) {
+          const c = result.candidates[0];
+          return c.type + ' ' + c.direction_phrase + ' · conf ' + c.detection_confidence;
+        }
+        if (result.person_count !== undefined) return result.person_count + ' people';
+        if (result.entities) return result.entities.length + ' entities';
+        if (result.direction_phrase) return result.direction_phrase;
+        return 'ok';
+      }
+
+      function addTrace(kind: 'call' | 'result', tool: string, detail: string) {
+        clearEmpty(traceEl);
+        const li = document.createElement('li');
+        li.className = 'trace-' + kind;
+        li.innerHTML = '<code>' + tool + '</code>';
+        li.append(document.createTextNode(' ' + detail));
+        traceEl.prepend(li);
+        while (traceEl.children.length > 24) traceEl.lastElementChild!.remove();
+      }
+
+      // Tools whose results describe saved state, so the memory panel can
+      // mirror whatever the agent just did without a separate round trip.
+      const MEMORY_TOOLS = new Set([
+        'list_saved_memories', 'remember', 'forget', 'recall',
+        'get_tasks', 'create_task', 'complete_task',
+      ]);
+
+      function memoryRow(primary: string, secondary: string, tag: string): HTMLLIElement {
+        const li = document.createElement('li');
+        li.className = 'mem-row';
+        const a = document.createElement('span');
+        a.className = 'etype';
+        a.textContent = primary;
+        const b = document.createElement('span');
+        b.className = 'edir';
+        b.textContent = secondary;
+        const c = document.createElement('span');
+        c.className = 'econf';
+        c.textContent = tag;
+        li.append(a, b, c);
+        return li;
+      }
+
+      // Memories and tasks arrive as SEPARATE tool results. Rendering each
+      // one directly into the panel meant the second result wiped the first,
+      // so the panel is backed by accumulated state and redrawn as a whole.
+      const memoryState: { memories: any[]; tasks: any[] } = { memories: [], tasks: [] };
+
+      function renderMemory(result: Record<string, any>) {
+        if (Array.isArray(result.memories)) memoryState.memories = result.memories;
+        if (Array.isArray(result.tasks)) memoryState.tasks = result.tasks;
+        // A single save returns one record rather than a list; fold it in so
+        // the panel updates immediately instead of waiting for a refresh.
+        if (result.saved && result.subject) {
+          const others = memoryState.memories.filter((m: any) => m.subject !== result.subject);
+          memoryState.memories = [
+            { subject: result.subject, content: result.content ?? '', kind: result.kind ?? 'fact' },
+            ...others,
+          ];
+        }
+        if (result.deleted_count && result.subject) {
+          memoryState.memories = memoryState.memories.filter(
+            (m: any) => m.subject !== result.subject,
+          );
+        }
+        drawMemoryPanel();
+      }
+
+      function drawMemoryPanel() {
+        memoriesEl.textContent = '';
+        for (const m of memoryState.memories) {
+          memoriesEl.append(memoryRow(m.subject, m.content, m.kind ?? 'fact'));
+        }
+        for (const t of memoryState.tasks) {
+          memoriesEl.append(memoryRow(t.title, t.due ?? 'no time set', t.priority ?? 'normal'));
+        }
+        if (!memoriesEl.children.length) {
+          memoriesEl.innerHTML = '<li class="empty">Nothing saved.</li>';
+        }
+      }
+
+      function refreshMemory() {
+        client.send({ type: 'invoke_tool', tool: 'list_saved_memories', args: {} });
+        client.send({ type: 'invoke_tool', tool: 'get_tasks', args: {} });
+      }
+
+      function renderSigns(regions: any[], tracked: any[]) {
+        signsEl.textContent = '';
+        const rows = (tracked && tracked.length ? tracked : regions) ?? [];
+        if (!rows.length) {
+          signsEl.innerHTML = '<li class="empty">No text detected.</li>';
+          return;
+        }
+        for (const r of rows.slice(0, 8)) {
+          const li = document.createElement('li');
+          li.className = 'sign-row';
+          const kind = r.warning ? 'warning' : (r.navigational ? 'direction' : 'text');
+          const text = document.createElement('span');
+          text.className = 'etype';
+          // textContent, not innerHTML: sign text comes from OCR of whatever is
+          // in front of the camera and must never be treated as markup.
+          text.textContent = r.text;
+          const dir = document.createElement('span');
+          dir.className = 'edir';
+          dir.textContent = String(r.direction).replace(/_/g, ' ');
+          const tag = document.createElement('span');
+          tag.className = 'sign-kind ' + kind;
+          tag.textContent = kind;
+          const conf = document.createElement('span');
+          conf.className = 'econf';
+          conf.textContent = Math.round((r.confidence ?? 0) * 100) + '%';
+          li.append(text, dir, tag, conf);
+          signsEl.append(li);
+        }
+      }
+
+      function renderEnrollments(records: any[]) {
+        enrollmentsEl.textContent = '';
+        if (!records || !records.length) {
+          enrollmentsEl.innerHTML = '<li class="empty">Nobody enrolled yet.</li>';
+          return;
+        }
+        for (const r of records) {
+          const li = document.createElement('li');
+          li.className = 'enroll-row-item';
+          const name = document.createElement('span');
+          name.className = 'etype';
+          name.textContent = r.name;
+          const label = document.createElement('span');
+          label.className = 'edir';
+          label.textContent = r.kind === 'person' ? 'person' : (r.object_class ?? 'item');
+          const samples = document.createElement('span');
+          samples.className = 'econf';
+          samples.textContent = r.sample_count + ' photo' + (r.sample_count === 1 ? '' : 's');
+          const remove = document.createElement('button');
+          remove.className = 'danger tiny';
+          remove.type = 'button';
+          remove.textContent = 'Remove';
+          remove.setAttribute('aria-label', 'Remove ' + r.name);
+          remove.addEventListener('click', () => {
+            if (!window.confirm('Stop recognizing ' + r.name + '?')) return;
+            client.send({ type: 'delete_enrollment', name: r.name, kind: r.kind });
+          });
+          li.append(name, label, samples, remove);
+          enrollmentsEl.append(li);
+        }
+      }
+
+      function renderProfile(profile: any) {
+        $('profile-name').textContent = profile.name ? profile.name : 'No name set';
+        const nameInput = $('profile-name-input') as HTMLInputElement | null;
+        if (nameInput && document.activeElement !== nameInput) {
+          nameInput.value = profile.name ?? '';
+        }
+
+        traitsEl.textContent = '';
+        const traits = Object.entries(profile.personality ?? {}) as [string, number][];
+        if (!traits.length) {
+          traitsEl.innerHTML = '<li class="empty">No preferences set yet.</li>';
+        } else {
+          for (const [trait, value] of traits) {
+            const li = document.createElement('li');
+            li.className = 'trait-row';
+            const label = document.createElement('span');
+            label.className = 'trait-name';
+            label.textContent = trait.replace(/_/g, ' ');
+            const bar = document.createElement('span');
+            bar.className = 'trait-bar';
+            const fill = document.createElement('span');
+            fill.className = 'trait-fill';
+            fill.style.width = Math.round(value * 100) + '%';
+            bar.append(fill);
+            const num = document.createElement('span');
+            num.className = 'econf';
+            num.textContent = value.toFixed(2);
+            li.append(label, bar, num);
+            traitsEl.append(li);
+          }
+        }
+
+        const b = profile.behaviour ?? {};
+        const a = profile.attention ?? {};
+        renderStats('behaviour-stats', [
+          ['Interrupt bar', b.interruption_threshold],
+          ['Cooldown', b.proactive_cooldown_s ? b.proactive_cooldown_s + 's' : '—'],
+          ['Sentences', b.sentence_budget],
+          ['Friend alerts', b.announce_friends ? 'on' : 'off'],
+          ['Suggest places', b.suggest_exploration ? 'on' : 'off'],
+          ['Spoken / held', (a.spoken ?? 0) + ' / ' + (a.suppressed ?? 0)],
+        ]);
+      }
+
+      function renderStats(id: string, rows: [string, unknown][]) {
+        const target = $(id);
+        target.textContent = '';
+        for (const [label, value] of rows) {
+          const wrap = document.createElement('div');
+          const dt = document.createElement('dt');
+          dt.textContent = label;
+          const dd = document.createElement('dd');
+          dd.textContent = value === undefined || value === null ? '—' : String(value);
+          wrap.append(dt, dd);
+          target.append(wrap);
+        }
+      }
+
+      function renderCrowd(crowd: any, facesSeen?: number, faceMs?: number | null) {
+        if (!crowd) return;
+        renderStats('crowd-stats', [
+          ['Crowd', crowd.size.replace(/_/g, ' ')],
+          ['People (approx)', crowd.person_count],
+          ['Density', crowd.density],
+          ['Motion', crowd.motion.replace(/_/g, ' ')],
+          ['Flow', crowd.flow_direction ?? crowd.flow],
+          ['Approaching', crowd.approaching ? 'yes' : 'no'],
+          ['Faces seen', facesSeen ?? 0],
+          ['Face check', faceMs ? faceMs + ' ms' : '—'],
+        ]);
+      }
+
+      function renderFriends(friends: any[]) {
+        friendsEl.textContent = '';
+        if (!friends.length) {
+          friendsEl.innerHTML = '<li class="empty">No enrolled friends in view.</li>';
+          return;
+        }
+        for (const f of friends) {
+          const li = document.createElement('li');
+          li.className = 'enroll-row-item';
+          const name = document.createElement('span');
+          name.className = 'etype';
+          name.textContent = f.name;
+          const where = document.createElement('span');
+          where.className = 'edir';
+          where.textContent = f.direction_phrase + (f.movement ? ' · ' + f.movement : '');
+          const conf = document.createElement('span');
+          conf.className = f.is_confident ? 'econf' : 'edist unreliable';
+          conf.textContent = f.is_confident
+            ? Math.round(f.identity_confidence * 100) + '%'
+            : 'unsure ' + Math.round(f.identity_confidence * 100) + '%';
+          const badge = document.createElement('span');
+          badge.className = 'sign-kind ' + (f.in_crowd ? 'direction' : '');
+          badge.textContent = f.in_crowd ? 'in crowd' : f.state;
+          li.append(name, where, conf, badge);
+          friendsEl.append(li);
+        }
+      }
+
+      function renderAttention(decision: any) {
+        clearEmpty(attentionEl);
+        const li = document.createElement('li');
+        li.className = 'trace-' + (decision.speak ? 'call' : 'result');
+        const code = document.createElement('code');
+        code.textContent = decision.event.type;
+        li.append(code);
+        li.append(document.createTextNode(
+          ' ' + (decision.speak ? 'SPOKE' : 'held: ' + decision.reason)
+          + ' · score ' + decision.score.toFixed(2) + ' vs ' + decision.threshold.toFixed(2),
+        ));
+        attentionEl.prepend(li);
+        while (attentionEl.children.length > 20) attentionEl.lastElementChild!.remove();
+      }
+
+      function renderEntities(entities: any[]) {
+        entitiesEl.textContent = '';
+        if (!entities.length) {
+          entitiesEl.innerHTML = '<li class="empty">Nothing detected.</li>';
+          return;
+        }
+        for (const e of entities) {
+          const li = document.createElement('li');
+          const reliable = e.distance_range !== 'unknown';
+          li.innerHTML =
+            '<span class="etype">' + e.type + '</span>' +
+            '<span class="edir">' + e.direction.replace(/_/g, ' ') + '</span>' +
+            '<span class="edist' + (reliable ? '' : ' unreliable') + '">' +
+              (reliable ? e.distance_range : 'distance unknown') + '</span>' +
+            '<span class="econf">' + Math.round(e.confidence * 100) + '%</span>';
+          entitiesEl.append(li);
+        }
+      }
+
+      function drawBoxes(boxes: DetectionBox[], frameW: number, frameH: number) {
+        const rect = video.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        overlay.width = rect.width;
+        overlay.height = rect.height;
+        const ctx = overlay.getContext('2d');
+        if (!ctx) return;
+        ctx.clearRect(0, 0, overlay.width, overlay.height);
+        // Frames are sent at the video's native size, so boxes must be scaled
+        // into the displayed size or they land in the wrong place.
+        const sx = overlay.width / frameW;
+        const sy = overlay.height / frameH;
+        ctx.lineWidth = 2;
+        ctx.font = '600 12px system-ui, sans-serif';
+        for (const b of boxes) {
+          const isPerson = b.class === 'person';
+          ctx.strokeStyle = isPerson ? '#4ade80' : '#60a5fa';
+          ctx.fillStyle = isPerson ? '#4ade80' : '#60a5fa';
+          const x = b.x1 * sx, y = b.y1 * sy;
+          const w = (b.x2 - b.x1) * sx, h = (b.y2 - b.y1) * sy;
+          ctx.strokeRect(x, y, w, h);
+          const label = b.class + ' ' + Math.round(b.confidence * 100) + '%';
+          const tw = ctx.measureText(label).width + 8;
+          ctx.fillRect(x, Math.max(0, y - 16), tw, 16);
+          ctx.fillStyle = '#04121f';
+          ctx.fillText(label, x + 4, Math.max(11, y - 4));
+        }
+      }
+
+      // ---------- capture loop ----------
+      function pump() {
+        rafHandle = requestAnimationFrame(pump);
+        if (!running || !client.isOpen) return;
+        const now = performance.now();
+        if (!sampler.shouldSample(now)) return;
+        const w = video.videoWidth, h = video.videoHeight;
+        if (!w || !h) return;
+
+        if (!captureCanvas) captureCanvas = document.createElement('canvas');
+        captureCanvas.width = w;
+        captureCanvas.height = h;
+        const ctx = captureCanvas.getContext('2d');
+        if (!ctx) return;
+        ctx.drawImage(video, 0, 0, w, h);
+        const seq = sampler.markSent(now);
+        client.sendFrame(seq, captureCanvas.toDataURL('image/jpeg', 0.6));
+      }
+
+      // ---------- start / stop ----------
+      $('btn-start').addEventListener('click', async () => {
+        try {
+          setAgentState('Starting…');
+          // Must happen inside the click for browsers to allow audio at all.
+          await player.resume();
+          void setUpHaptics(true);
+
+          const stream = await camera.start();
+          video.srcObject = stream;
+          await video.play();
+          $('cam-placeholder').style.display = 'none';
+
+          mic = new MicCapture({
+            onChunk: (b64) => client.sendAudio(b64),
+            onLevel: (level) => {
+              ($('level-fill') as HTMLElement).style.width = Math.min(100, level * 180) + '%';
+            },
+            onStateChange: (s, d) => { if (s === 'error') setAgentState('Microphone error: ' + d); },
+          });
+          await mic.start();
+
+          client.startVoice();
+          running = true;
+          sampler.reset();
+          cancelAnimationFrame(rafHandle);
+          pump();
+
+          ($('btn-start') as HTMLButtonElement).disabled = true;
+          ($('btn-stop') as HTMLButtonElement).disabled = false;
+          ($('btn-mute') as HTMLButtonElement).disabled = false;
+          setAgentState('Listening…');
+        } catch (err) {
+          setAgentState('Could not start: ' + (err instanceof Error ? err.message : String(err)));
+        }
+      });
+
+      $('btn-stop').addEventListener('click', async () => {
+        running = false;
+        cancelAnimationFrame(rafHandle);
+        client.stopVoice();
+        await mic?.stop();
+        mic = null;
+        player.interrupt();
+        camera.stop();
+        video.srcObject = null;
+        $('cam-placeholder').style.display = '';
+        overlay.getContext('2d')?.clearRect(0, 0, overlay.width, overlay.height);
+        ($('btn-start') as HTMLButtonElement).disabled = false;
+        ($('btn-stop') as HTMLButtonElement).disabled = true;
+        ($('btn-mute') as HTMLButtonElement).disabled = true;
+        setAgentState('Stopped.');
+      });
+
+      $('btn-mute').addEventListener('click', () => {
+        const button = $('btn-mute') as HTMLButtonElement;
+        const nowMuted = button.getAttribute('aria-pressed') !== 'true';
+        button.setAttribute('aria-pressed', String(nowMuted));
+        button.textContent = nowMuted ? 'Unmute mic' : 'Mute mic';
+        mic?.setMuted(nowMuted);
+      });
+
+      // ---------- haptics (Parts 38-44) ----------
+      let hapticProvider: any = null;
+
+      function playHaptic(dispatch: any) {
+        clearEmpty(attentionEl);
+        const li = document.createElement('li');
+        li.className = 'trace-call';
+        const code = document.createElement('code');
+        code.textContent = 'buzz ' + dispatch.name;
+        li.append(code);
+        li.append(document.createTextNode(
+          ' [' + dispatch.pulses.join(',') + '] ms · ' + dispatch.priority
+          + (dispatch.note ? ' · single motor, direction not conveyed' : ''),
+        ));
+        attentionEl.prepend(li);
+        hapticProvider?.vibrate(dispatch);
+      }
+
+      // `gestured` must be true before a vibration-capable provider is chosen:
+      // browsers refuse navigator.vibrate() until the user has tapped.
+      async function setUpHaptics(gestured = false) {
+        const mod = await import('../lib/haptics/HapticProvider');
+        hapticProvider = gestured
+          ? await mod.selectHapticProvider()
+          : new mod.MockHapticProvider();
+        await hapticProvider.connect?.();
+        $('haptic-provider').textContent =
+          'Haptics: ' + hapticProvider.label
+          + (hapticProvider.supportsDirection ? ' · directional' : ' · no direction');
+        client.send({
+          type: 'haptic_provider',
+          provider: hapticProvider.id,
+          connected: true,
+          supports_direction: hapticProvider.supportsDirection,
+        });
+      }
+
+      $('btn-test-haptic').addEventListener('click', async () => {
+        // This click IS the gesture, so upgrade to real hardware if present.
+        await setUpHaptics(true);
+        client.send({ type: 'test_haptic', event: 'FRIEND_DETECTED' });
+      });
+
+      $('btn-quiet').addEventListener('click', () => {
+        const on = $('btn-quiet').getAttribute('aria-pressed') !== 'true';
+        client.send({ type: 'set_quiet_mode', enabled: on });
+      });
+
+      // Quick personas make the personality engine demonstrable without having
+      // to speak a dozen preferences first (Part 68).
+      const PERSONAS: Record<string, Record<string, number>> = {
+        social:    { extrovert: 0.85, explorer: 0.8, nature_lover: 0.9, social: 0.75 },
+        quiet:     { introvert: 0.85, calm: 0.8, minimalist: 0.7 },
+        practical: { practical: 0.9, minimalist: 0.8, routine_oriented: 0.7 },
+      };
+
+      document.querySelectorAll('[data-persona]').forEach((button) => {
+        button.addEventListener('click', () => {
+          const key = (button as HTMLElement).dataset.persona!;
+          client.setProfile({ reset: true, traits: PERSONAS[key] });
+        });
+      });
+
+      $('profile-form').addEventListener('submit', (event) => {
+        event.preventDefault();
+        const value = ($('profile-name-input') as HTMLInputElement).value.trim();
+        client.setProfile({ name: value });
+      });
+
+      $('btn-reset-profile').addEventListener('click', () => {
+        if (!window.confirm('Clear your name, preferences and personality settings?')) return;
+        client.setProfile({ reset: true, name: '' });
+      });
+
+      $('btn-refresh-profile').addEventListener('click', () => {
+        client.send({ type: 'get_profile' });
+      });
+
+      // Part 68: a deterministic scene so the whole agent can be shown without
+      // depending on a real crowd being in front of the camera.
+      $('btn-demo').addEventListener('click', () => {
+        const scene = [
+          { event: 'CROWD_APPEARED', severity: 'ENVIRONMENT',
+            summary: 'There is a fairly large crowd ahead of you, roughly 12 people that I can see. Most of them are moving toward your left.' },
+          { event: 'FRIEND_DETECTED_IN_CROWD', severity: 'SOCIAL', subject: 'Ravi',
+            summary: 'Ravi is slightly to your right, inside the crowd.' },
+          { event: 'PLACE_DETECTED', severity: 'AMBIENT', subject: 'park',
+            summary: "There's a sign reading 'City Park' slightly to your left." },
+        ];
+        scene.forEach((step, i) =>
+          window.setTimeout(() => client.send({ type: 'demo_event', ...step }), i * 1200));
+      });
+
+      // ---------- enrollment ----------
+      let pendingPhoto: string | null = null;
+
+      $('enroll-kind').addEventListener('change', (event) => {
+        const isBelonging = (event.target as HTMLSelectElement).value === 'belonging';
+        ($('enroll-class') as HTMLSelectElement).hidden = !isBelonging;
+        ($('enroll-name') as HTMLInputElement).placeholder =
+          isBelonging ? 'Name (e.g. my backpack)' : 'Name (e.g. Rahul)';
+      });
+
+      $('enroll-file').addEventListener('change', (event) => {
+        const file = (event.target as HTMLInputElement).files?.[0];
+        if (!file) {
+          pendingPhoto = null;
+          $('enroll-filename').textContent = 'No photo chosen - will use the live camera.';
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => {
+          pendingPhoto = String(reader.result);
+          $('enroll-filename').textContent = file.name;
+        };
+        reader.readAsDataURL(file);
+      });
+
+      $('enroll-form').addEventListener('submit', (event) => {
+        event.preventDefault();
+        const name = ($('enroll-name') as HTMLInputElement).value.trim();
+        if (!name) return;
+        const kind = ($('enroll-kind') as HTMLSelectElement).value;
+        $('enroll-status').textContent = 'Adding...';
+        client.send({
+          type: 'enroll',
+          kind,
+          name,
+          object_class: kind === 'belonging'
+            ? ($('enroll-class') as HTMLSelectElement).value : undefined,
+          image: pendingPhoto ?? undefined,
+        });
+      });
+
+      $('btn-refresh-memory').addEventListener('click', refreshMemory);
+
+      $('btn-forget-all').addEventListener('click', () => {
+        // Irreversible, so it is confirmed rather than one-click.
+        // Labelled precisely: this clears saved memories, NOT tasks. Saying
+        // "forget everything" while tasks survived was a promise the button
+        // did not keep.
+        if (!window.confirm('Delete all saved memories? Tasks are not affected.')) return;
+        client.send({ type: 'forget_all_memories' });
+      });
+
+      $('text-form').addEventListener('submit', (event) => {
+        event.preventDefault();
+        const input = $('text-entry') as HTMLInputElement;
+        const text = input.value.trim();
+        if (!text) return;
+        appendLine('user', text);
+        client.sendText(text);
+        input.value = '';
+      });
+    </script>
+
+    <style>
+      /* ============================================================
+         MOBILE-FIRST NOTES
+
+         The phone is the real device for this app: it is the thing a user
+         actually carries, its rear camera sees the world, and Android Chrome
+         is the only browser here that can genuinely vibrate.
+
+         Three things drive the phone layout:
+           1. VOICE FIRST. Controls and camera are reachable with a thumb; the
+              nine developer panels collapse so they cost one line each.
+           2. TOUCH TARGETS. Everything interactive is >= 44px, which is also
+              why inputs are 16px — anything smaller makes iOS zoom the page
+              on focus and the user then has to pinch back out.
+           3. NOTCHES. Safe-area insets keep the sticky control bar clear of
+              the home indicator.
+         ============================================================ */
+      :root {
+        --bg: #0b1220; --panel: #131c2e; --line: #22304a;
+        --text: #e8eefc; --muted: #93a4c4; --accent: #60a5fa; --ok: #4ade80; --bad: #f87171;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; background: var(--bg); color: var(--text);
+        font: 16px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif;
+      }
+      .skip {
+        position: absolute; left: -999px; background: var(--accent); color: #04121f;
+        padding: .6rem 1rem; border-radius: 0 0 8px 0; z-index: 10;
+      }
+      .skip:focus { left: 0; top: 0; }
+      header {
+        display: flex; flex-wrap: wrap; gap: 1rem; align-items: center;
+        justify-content: space-between; padding: 1rem 1.5rem; border-bottom: 1px solid var(--line);
+      }
+      h1 { font-size: 1.15rem; margin: 0; letter-spacing: .01em; }
+      h2 { font-size: .95rem; margin: 0 0 .5rem; color: var(--text); }
+      .badges { display: flex; gap: .5rem; flex-wrap: wrap; }
+      .badge {
+        font-size: .78rem; padding: .25rem .6rem; border-radius: 999px;
+        background: #1b2740; border: 1px solid var(--line); color: var(--muted);
+      }
+      .badge[data-state='open'], .badge[data-state='ok'] { color: var(--ok); border-color: #245c3a; }
+      .badge[data-state='error'], .badge[data-state='closed'] { color: var(--bad); border-color: #5c2424; }
+      main { padding: 1.25rem 1.5rem 3rem; max-width: 1400px; margin: 0 auto; }
+      .panel {
+        background: var(--panel); border: 1px solid var(--line);
+        border-radius: 12px; padding: 1rem;
+      }
+      .controls {
+        display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; margin-bottom: 1.25rem;
+      }
+      button {
+        font: inherit; font-weight: 600; padding: .7rem 1.2rem; border-radius: 9px;
+        border: 1px solid transparent; cursor: pointer;
+      }
+      button:disabled { opacity: .45; cursor: not-allowed; }
+      button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+      .primary { background: var(--accent); color: #04121f; }
+      .secondary { background: #1b2740; color: var(--text); border-color: var(--line); }
+      .level { flex: 1; min-width: 90px; height: 8px; background: #1b2740; border-radius: 999px; overflow: hidden; }
+      #level-fill { height: 100%; width: 0; background: var(--ok); transition: width .08s linear; }
+      .hint { color: var(--muted); font-size: .85rem; margin: 0; }
+      .controls .hint { flex-basis: 100%; }
+      .grid {
+        display: grid; gap: 1.25rem;
+        grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+      }
+      .stage {
+        position: relative; aspect-ratio: 4 / 3; background: #04121f;
+        border-radius: 9px; overflow: hidden; display: grid; place-items: center;
+      }
+      video { width: 100%; height: 100%; object-fit: cover; display: block; }
+      canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+      .placeholder { position: absolute; color: var(--muted); margin: 0; }
+      .stats { display: grid; grid-template-columns: 1fr 1fr; gap: .4rem 1rem; margin: .85rem 0 0; }
+      .stats div { display: flex; justify-content: space-between; gap: .5rem; font-size: .82rem; }
+      .stats dt { color: var(--muted); margin: 0; }
+      .stats dd { margin: 0; font-variant-numeric: tabular-nums; }
+      .transcript {
+        height: 260px; overflow-y: auto; padding-right: .4rem;
+        display: flex; flex-direction: column; gap: .55rem;
+      }
+      .line { margin: 0; padding: .55rem .7rem; border-radius: 9px; background: #1b2740; }
+      .line.user { background: #1d2b45; }
+      .line.agent { background: #17304a; }
+      .who { display: block; font-size: .7rem; text-transform: uppercase;
+             letter-spacing: .06em; color: var(--muted); margin-bottom: .15rem; }
+      .text-input { display: flex; gap: .5rem; margin-top: .75rem; }
+      .text-input input {
+        flex: 1; font: inherit; padding: .6rem .75rem; border-radius: 9px;
+        border: 1px solid var(--line); background: #0e1626; color: var(--text);
+      }
+      .text-input input:focus-visible { outline: 3px solid var(--accent); outline-offset: 1px; }
+      .entities, .trace { list-style: none; margin: .5rem 0 0; padding: 0;
+                          display: flex; flex-direction: column; gap: .35rem;
+                          max-height: 240px; overflow-y: auto; }
+      .entities li {
+        display: grid; grid-template-columns: 1.2fr 1fr 1.1fr auto; gap: .5rem;
+        align-items: center; font-size: .85rem; padding: .45rem .6rem;
+        background: #1b2740; border-radius: 8px;
+      }
+      .etype { font-weight: 600; }
+      .edir, .edist { color: var(--muted); }
+      .edist.unreliable { color: #fbbf24; font-style: italic; }
+      .econf { font-variant-numeric: tabular-nums; color: var(--ok); }
+      .profile-name { font-size: 1.05rem; font-weight: 600; margin: .25rem 0 .5rem; }
+      .traits { list-style: none; margin: 0 0 .75rem; padding: 0;
+                display: flex; flex-direction: column; gap: .3rem; }
+      .trait-row { display: grid; grid-template-columns: 8.5rem 1fr auto;
+                   gap: .5rem; align-items: center; font-size: .82rem; }
+      .trait-name { color: var(--muted); text-transform: capitalize; }
+      .trait-bar { height: 8px; background: #1b2740; border-radius: 999px; overflow: hidden; }
+      .trait-fill { display: block; height: 100%; background: var(--accent); }
+      .enroll { display: flex; flex-direction: column; gap: .5rem; margin-bottom: .75rem; }
+      .enroll-row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+      .enroll-row select, .enroll-row input[type='text'] {
+        font: inherit; padding: .5rem .6rem; border-radius: 8px;
+        border: 1px solid var(--line); background: #0e1626; color: var(--text);
+      }
+      .enroll-row input[type='text'] { flex: 1; min-width: 140px; }
+      .enroll-row input[type='file'] { display: none; }
+      .file-btn {
+        font-weight: 600; font-size: .85rem; padding: .5rem .8rem; border-radius: 8px;
+        background: #1b2740; border: 1px solid var(--line); cursor: pointer;
+      }
+      .file-btn:hover { border-color: var(--accent); }
+      .enroll-row .hint { flex: 1; min-width: 120px; }
+      .tiny { padding: .3rem .6rem !important; font-size: .75rem !important; }
+      .enroll-row-item {
+        display: grid; grid-template-columns: 1.2fr 1fr auto auto; gap: .5rem;
+        align-items: center; font-size: .85rem; padding: .45rem .6rem;
+        background: #1b2740; border-radius: 8px;
+      }
+      .sign-row { grid-template-columns: 1.6fr 1fr auto auto !important; }
+      .sign-kind {
+        font-size: .7rem; text-transform: uppercase; letter-spacing: .04em;
+        padding: .1rem .4rem; border-radius: 999px; border: 1px solid var(--line);
+        color: var(--muted);
+      }
+      .sign-kind.warning { color: #fca5a5; border-color: #5c2424; }
+      .sign-kind.direction { color: var(--accent); border-color: #24405c; }
+      .mem-actions { display: flex; gap: .5rem; margin-bottom: .25rem; }
+      .mem-actions button { padding: .45rem .8rem; font-size: .85rem; }
+      .danger { background: #3a1c22; color: #fca5a5; border-color: #5c2424; }
+      .mem-row { grid-template-columns: 1fr 1.6fr auto !important; }
+      .trace li { font-size: .8rem; padding: .4rem .6rem; background: #1b2740;
+                  border-radius: 8px; border-left: 3px solid var(--line); }
+      .trace-call { border-left-color: var(--accent) !important; }
+      .trace-result { border-left-color: var(--ok) !important; }
+      code { font-family: ui-monospace, 'Cascadia Code', monospace; color: var(--accent); }
+      .empty { color: var(--muted); font-size: .85rem; margin: 0; }
+      .visually-hidden {
+        position: absolute; width: 1px; height: 1px; overflow: hidden;
+        clip: rect(0 0 0 0); white-space: nowrap;
+      }
+
+      /* ==================== PHONE LAYOUT ==================== */
+      @media (max-width: 720px) {
+        body { font-size: 15px; }
+        header {
+          padding: .6rem .8rem;
+          position: sticky; top: 0; z-index: 5;
+          background: var(--bg);
+          padding-top: max(.6rem, env(safe-area-inset-top));
+        }
+        h1 { font-size: .95rem; }
+        .badge { font-size: .7rem; padding: .2rem .45rem; }
+        main { padding: .75rem .8rem 8.5rem; }
+        .grid { grid-template-columns: 1fr; gap: .75rem; }
+
+        /* The two things a user actually needs come first. */
+        .panel[aria-label='Live camera and detections'] { order: 1; }
+        .panel[aria-label='Conversation'] { order: 2; }
+        .panel { order: 3; }
+
+        /* Controls become a fixed thumb-reachable bar. */
+        .controls {
+          position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
+          margin: 0; border-radius: 14px 14px 0 0;
+          border-bottom: none;
+          padding: .7rem .8rem calc(.7rem + env(safe-area-inset-bottom));
+          box-shadow: 0 -8px 24px rgba(0,0,0,.45);
+          gap: .5rem;
+        }
+        .controls button { flex: 1 1 auto; min-height: 48px; font-size: .95rem; }
+        .controls .level { flex-basis: 100%; order: 4; }
+        .controls .hint { order: 5; font-size: .8rem; }
+
+        /* Camera gets the room; 3:4 suits a portrait phone better than 4:3. */
+        .stage { aspect-ratio: 3 / 4; }
+        .transcript { height: 34vh; }
+
+        /* Collapsed developer panels cost one tappable line each. */
+        .panel > h2 { cursor: pointer; user-select: none; }
+        .panel.collapsible > h2::after {
+          content: '▾'; float: right; color: var(--muted); transition: transform .15s;
+        }
+        .panel.collapsible.closed > h2::after { transform: rotate(-90deg); }
+        .panel.collapsible.closed > :not(h2) { display: none; }
+        .panel.collapsible > h2 { margin: 0; padding: .35rem 0; min-height: 44px;
+                                  display: flex; align-items: center; }
+
+        /* Touch targets and no-zoom inputs. */
+        button, .file-btn { min-height: 44px; }
+        .tiny { min-height: 36px; }
+        input[type='text'], select { font-size: 16px; min-height: 44px; }
+        .text-input input { font-size: 16px; }
+
+        /* Two compact columns, not one: a single column made the camera panel
+           tall enough to push the conversation entirely off-screen. */
+        .stats { grid-template-columns: 1fr 1fr; gap: .2rem .6rem; font-size: .74rem; }
+        .stats div { font-size: .74rem; }
+        /* 4:5 leaves room for the conversation to peek above the fold. */
+        .stage { aspect-ratio: 4 / 5; }
+        .entities li, .enroll-row-item, .sign-row, .mem-row {
+          grid-template-columns: 1fr auto !important;
+          gap: .15rem .5rem;
+        }
+        .entities li > *:nth-child(n+3) { grid-column: 1 / -1; font-size: .78rem; }
+        .trait-row { grid-template-columns: 6.5rem 1fr auto; }
+        .enroll-row { gap: .4rem; }
+        .enroll-row button, .enroll-row .file-btn { flex: 1 1 auto; }
+      }
+
+      @media (max-width: 400px) {
+        .badges { gap: .3rem; }
+        .trait-row { grid-template-columns: 5.5rem 1fr auto; font-size: .78rem; }
+      }
+
+      /* Landscape phone: the camera should not eat the whole screen. */
+      @media (max-width: 900px) and (orientation: landscape) {
+        .stage { aspect-ratio: 16 / 9; }
+        .transcript { height: 26vh; }
+      }
+
+      /* Coarse pointers get bigger hit areas regardless of width. */
+      @media (pointer: coarse) {
+        button, .file-btn, select { min-height: 44px; }
+      }
+
+      @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+    </style>
+  </body>
+</html>

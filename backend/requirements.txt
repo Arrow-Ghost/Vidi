@@ -1,0 +1,16 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pydantic==2.9.2
+pydantic-settings==2.5.2
+websockets==13.1
+python-dotenv==1.0.1
+httpx==0.27.2
+pytest==8.3.3
+
+# Segment 3 — perception (CPU-only; no CUDA extras needed on this hardware)
+torch==2.13.0
+ultralytics==8.4.130
+opencv-python-headless==5.0.0.93
+
+# Segment 11/12 — Gemini conversation + function calling
+google-genai==2.20.0
