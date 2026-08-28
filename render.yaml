@@ -1,0 +1,48 @@
+# Render blueprint for the Vidi backend.
+#
+# Import this from the Render dashboard (New -> Blueprint) and it fills in
+# every field below automatically. The manual equivalents are in
+# docs/DEPLOYMENT.md if you would rather click through the form.
+#
+# SIZING, because this is the field people get wrong:
+# the process holds YOLO, Depth Anything, YuNet, SFace and MobileNet in memory
+# and measures ~460 MB resident. The 512 MB free and Starter instances will be
+# killed by the OOM reaper part-way through a session, which looks like the
+# backend randomly dying. `standard` (2 GB) is the smallest that genuinely fits.
+
+services:
+  - type: web
+    name: vidi-backend
+    runtime: python
+    plan: standard                # 2 GB RAM. free/starter (512 MB) will OOM.
+    region: oregon                # move this nearer your users; it is round-trip
+                                  # latency on every camera frame.
+    rootDir: backend
+    healthCheckPath: /health
+
+    # fetch_models.py pulls the ~150 MB of ONNX weights that are not in git.
+    # yolov8n.onnx IS committed, which is why torch is not installed here.
+    buildCommand: pip install -r requirements.txt && python ../scripts/fetch_models.py
+
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.13.0"
+
+      # Set this in the dashboard, not here. Never commit an API key.
+      - key: GEMINI_API_KEY
+        sync: false
+
+      # Must list the exact Vercel origin, scheme included and no trailing
+      # slash, or the browser's requests are rejected by CORS.
+      - key: CORS_ORIGINS
+        sync: false
+
+    # SQLite lives on disk. Without this, every deploy wipes the user's saved
+    # memories, tasks and enrolled people, because Render's filesystem is
+    # otherwise ephemeral.
+    disk:
+      name: vidi-data
+      mountPath: /opt/render/project/src/backend/data
+      sizeGB: 1

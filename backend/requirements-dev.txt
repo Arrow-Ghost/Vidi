@@ -1,0 +1,9 @@
+# Development-only dependencies. NOT installed in deployment.
+-r requirements.txt
+
+pytest==8.3.3
+
+# Needed ONLY to re-export yolov8n.pt -> yolov8n.onnx. The exported ONNX is
+# committed, so deployments never install these (they are ~1 GB together).
+torch==2.13.0
+ultralytics==8.4.130
