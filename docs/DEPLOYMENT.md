@@ -93,7 +93,7 @@ same-host default.
 
 ## Order of operations
 
-There is a circular dependency — each side needs the other's URL.
+There is a circular dependency — each side needs the other's URL...
 
 1. Deploy **Render** first. Set `GEMINI_API_KEY`; leave `CORS_ORIGINS` blank.
 2. Copy the Render URL, e.g. `https://vidi-backend.onrender.com`.
